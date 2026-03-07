@@ -93,7 +93,14 @@ async def handle_sse(request:Request):
 async def health(request:Request):
     return JSONResponse({"status":"ok","service":"Zoho MCP"})
 
-app=Starlette(routes=[Route("/health",health),Route("/sse",handle_sse),Mount("/messages/",app=sse.handle_post_message)])
+happ=Starlette(routes=[Route("/health",health),Route("/sse",handle_sse),Route("/exchange",exchange),Mount("/messages/",app=sse.handle_post_message)])
 
+
+async def exchange(request:Request):
+        code=request.query_params.get("code","")
+        if not code:return JSONResponse({"error":"no code"})
+                async with httpx.AsyncClient() as c:
+                            r=await c.post(f"{BASE}/oauth/v2/token",data={"code":code,"client_id":CLIENT_ID,"client_secret":CLIENT_SECRET,"redirect_uri":"https://zohoapis.com","grant_type":"authorization_code"})
+                            return JSONResponse(r.json())
 if __name__=="__main__":
     uvicorn.run(app,host="0.0.0.0",port=int(os.getenv("PORT",8000)))
