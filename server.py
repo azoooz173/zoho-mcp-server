@@ -73,7 +73,7 @@ async def list_tools():
 async def call_tool(name: str, arguments: dict):
     try:
         if name == "zoho_crm_list":
-            data = await zget(f"{CRM}/{arguments.get('module','Contacts')}", params={"per_page": arguments.get("per_page", 10)})
+            data = await zget(f"{CRM}/{arguments.get('module','Contacts')}", params={"per_page": arguments.get("per_page", 10), "fields": "Full_Name,Email,Phone,Account_Name"})
         elif name == "zoho_crm_search":
             data = await zget(f"{CRM}/{arguments['module']}/search", params={"criteria": arguments["criteria"]})
         elif name == "zoho_crm_create":
