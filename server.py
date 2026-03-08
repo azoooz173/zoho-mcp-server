@@ -1,4 +1,4 @@
-import os, json, httpx
+import os, json, asyncio, time, httpx
 from mcp.server import Server
 from mcp.server.sse import SseServerTransport
 from mcp.types import Tool, TextContent
@@ -20,12 +20,14 @@ BOOKS = f"https://www.zohoapis.{DC}/books/v3"
 INV   = f"https://www.zohoapis.{DC}/inventory/v1"
 MAIL  = f"https://mail.zoho.{DC}/api"
 
-_tok = None
+TOKEN_TTL = 50 * 60  # 50 minutes
 
-async def get_token():
-    global _tok
-    if _tok:
-        return _tok
+_tok      = None
+_tok_time = 0.0
+
+
+async def _fetch_token() -> str:
+    global _tok, _tok_time
     async with httpx.AsyncClient() as c:
         r = await c.post(f"{BASE}/oauth/v2/token", data={
             "refresh_token": REFRESH_TOKEN,
@@ -33,8 +35,30 @@ async def get_token():
             "client_secret": CLIENT_SECRET,
             "grant_type":    "refresh_token",
         })
-        _tok = r.json().get("access_token")
+        token = r.json().get("access_token")
+        if token:
+            _tok      = token
+            _tok_time = time.time()
+            print(f"[token] refreshed at {time.strftime('%H:%M:%S')}", flush=True)
         return _tok
+
+
+async def get_token() -> str:
+    if _tok and (time.time() - _tok_time) < TOKEN_TTL:
+        return _tok
+    return await _fetch_token()
+
+
+async def _auto_refresh():
+    """Background task: proactively refresh token every 50 minutes."""
+    await _fetch_token()
+    while True:
+        await asyncio.sleep(TOKEN_TTL)
+        try:
+            await _fetch_token()
+        except Exception as e:
+            print(f"[token] auto-refresh failed: {e}", flush=True)
+
 
 async def zget(url, params=None):
     global _tok
@@ -43,9 +67,10 @@ async def zget(url, params=None):
         r = await c.get(url, headers={"Authorization": f"Zoho-oauthtoken {t}"}, params=params, timeout=30)
         if r.status_code == 401:
             _tok = None
-            t = await get_token()
+            t = await _fetch_token()
             r = await c.get(url, headers={"Authorization": f"Zoho-oauthtoken {t}"}, params=params, timeout=30)
         return r.json()
+
 
 async def zpost(url, body):
     t = await get_token()
@@ -53,7 +78,9 @@ async def zpost(url, body):
         r = await c.post(url, headers={"Authorization": f"Zoho-oauthtoken {t}"}, json=body, timeout=30)
         return r.json()
 
+
 mcp = Server("zoho-mcp")
+
 
 @mcp.list_tools()
 async def list_tools():
@@ -68,6 +95,7 @@ async def list_tools():
         Tool(name="zoho_mail_accounts", description="List Zoho Mail accounts", inputSchema={"type":"object","properties":{}}),
         Tool(name="zoho_mail_messages", description="Read messages from Zoho Mail", inputSchema={"type":"object","properties":{"account_id":{"type":"string"},"limit":{"type":"integer","default":10}},"required":["account_id"]}),
     ]
+
 
 @mcp.call_tool()
 async def call_tool(name: str, arguments: dict):
@@ -102,20 +130,32 @@ async def call_tool(name: str, arguments: dict):
     except Exception as e:
         return [TextContent(type="text", text=f"Error: {e}")]
 
+
 sse = SseServerTransport("/messages/")
+
 
 async def handle_sse(request: Request):
     async with sse.connect_sse(request.scope, request.receive, request._send) as streams:
         await mcp.run(streams[0], streams[1], mcp.create_initialization_options())
 
-async def health(request: Request):
-    return JSONResponse({"status": "ok", "service": "Zoho MCP"})
 
-app = Starlette(routes=[
-    Route("/health", health),
-    Route("/sse",    handle_sse),
-    Mount("/messages/", app=sse.handle_post_message),
-])
+async def health(request: Request):
+    age = int(time.time() - _tok_time) if _tok_time else -1
+    return JSONResponse({"status": "ok", "service": "Zoho MCP", "token_age_sec": age})
+
+
+async def on_startup():
+    asyncio.create_task(_auto_refresh())
+
+
+app = Starlette(
+    routes=[
+        Route("/health", health),
+        Route("/sse",    handle_sse),
+        Mount("/messages/", app=sse.handle_post_message),
+    ],
+    on_startup=[on_startup],
+)
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
