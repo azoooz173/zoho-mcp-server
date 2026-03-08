@@ -183,12 +183,27 @@ async def handle_sse(request: Request):
         await mcp.run(streams[0], streams[1], mcp.create_initialization_options())
 
 
+
+async def exchange_code(request: Request):
+    import httpx
+    code = request.query_params.get("code","")
+    async with httpx.AsyncClient() as c:
+        r = await c.post("https://accounts.zoho.com/oauth/v2/token", data={
+            "code": code,
+            "client_id": CLIENT_ID,
+            "client_secret": CLIENT_SECRET,
+            "redirect_uri": "urn:ietf:wg:oauth:2.0:oob",
+            "grant_type": "authorization_code",
+        })
+    return JSONResponse(r.json())
+
 async def health(request: Request):
     return JSONResponse({"status": "ok", "service": "Zoho MCP"})
 
 
 app = Starlette(routes=[
     Route("/health", health),
+    Route("/exchange", exchange_code),
     Route("/sse",    handle_sse),
     Mount("/messages/", app=sse.handle_post_message),
 ])
