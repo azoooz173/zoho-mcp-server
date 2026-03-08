@@ -20,7 +20,7 @@ BOOKS = f"https://www.zohoapis.{DC}/books/v3"
 INV   = f"https://www.zohoapis.{DC}/inventory/v1"
 MAIL  = f"https://mail.zoho.{DC}/api"
 
-TOKEN_TTL = 50 * 60  # 50 minutes
+TOKEN_TTL = 50 * 60
 
 _tok      = None
 _tok_time = 0.0
@@ -50,7 +50,6 @@ async def get_token() -> str:
 
 
 async def _auto_refresh():
-    """Background task: proactively refresh token every 50 minutes."""
     await _fetch_token()
     while True:
         await asyncio.sleep(TOKEN_TTL)
@@ -79,53 +78,227 @@ async def zpost(url, body):
         return r.json()
 
 
+async def zput(url, body):
+    t = await get_token()
+    async with httpx.AsyncClient() as c:
+        r = await c.put(url, headers={"Authorization": f"Zoho-oauthtoken {t}"}, json=body, timeout=30)
+        return r.json()
+
+
+async def zdelete(url):
+    t = await get_token()
+    async with httpx.AsyncClient() as c:
+        r = await c.delete(url, headers={"Authorization": f"Zoho-oauthtoken {t}"}, timeout=30)
+        return r.json()
+
+
 mcp = Server("zoho-mcp")
 
 
 @mcp.list_tools()
 async def list_tools():
     return [
-        Tool(name="zoho_crm_list", description="List CRM records", inputSchema={"type":"object","properties":{"module":{"type":"string"},"per_page":{"type":"integer","default":10}},"required":["module"]}),
-        Tool(name="zoho_crm_search", description="Search CRM records", inputSchema={"type":"object","properties":{"module":{"type":"string"},"criteria":{"type":"string"}},"required":["module","criteria"]}),
-        Tool(name="zoho_crm_create", description="Create a new CRM record", inputSchema={"type":"object","properties":{"module":{"type":"string"},"data":{"type":"object"}},"required":["module","data"]}),
-        Tool(name="zoho_books_invoices", description="List invoices from Zoho Books", inputSchema={"type":"object","properties":{"status":{"type":"string"}}}),
-        Tool(name="zoho_books_contacts", description="List contacts from Zoho Books", inputSchema={"type":"object","properties":{"search":{"type":"string"}}}),
-        Tool(name="zoho_inventory_items", description="List items from Zoho Inventory", inputSchema={"type":"object","properties":{}}),
-        Tool(name="zoho_inventory_orders", description="List sales orders from Zoho Inventory", inputSchema={"type":"object","properties":{"status":{"type":"string"}}}),
-        Tool(name="zoho_mail_accounts", description="List Zoho Mail accounts", inputSchema={"type":"object","properties":{}}),
-        Tool(name="zoho_mail_messages", description="Read messages from Zoho Mail", inputSchema={"type":"object","properties":{"account_id":{"type":"string"},"limit":{"type":"integer","default":10}},"required":["account_id"]}),
+        # ── CRM ──────────────────────────────────────────────────
+        Tool(name="zoho_crm_list", description="List CRM records (Contacts/Leads/Accounts/Deals)", inputSchema={
+            "type": "object",
+            "properties": {
+                "module":   {"type": "string", "description": "Contacts, Leads, Accounts, Deals"},
+                "per_page": {"type": "integer", "default": 10},
+            },
+            "required": ["module"],
+        }),
+        Tool(name="zoho_crm_search", description="Search CRM records by criteria", inputSchema={
+            "type": "object",
+            "properties": {
+                "module":   {"type": "string"},
+                "criteria": {"type": "string", "description": "e.g. (Email:equals:test@example.com)"},
+            },
+            "required": ["module", "criteria"],
+        }),
+        Tool(name="zoho_crm_create", description="Create a new CRM record", inputSchema={
+            "type": "object",
+            "properties": {
+                "module": {"type": "string"},
+                "data":   {"type": "object"},
+            },
+            "required": ["module", "data"],
+        }),
+        Tool(name="zoho_crm_update", description="Update an existing CRM record by ID", inputSchema={
+            "type": "object",
+            "properties": {
+                "module":    {"type": "string"},
+                "record_id": {"type": "string"},
+                "data":      {"type": "object"},
+            },
+            "required": ["module", "record_id", "data"],
+        }),
+        Tool(name="zoho_crm_delete", description="Delete a CRM record by ID", inputSchema={
+            "type": "object",
+            "properties": {
+                "module":    {"type": "string"},
+                "record_id": {"type": "string"},
+            },
+            "required": ["module", "record_id"],
+        }),
+        # ── Books ─────────────────────────────────────────────────
+        Tool(name="zoho_books_invoices", description="List invoices from Zoho Books", inputSchema={
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "description": "draft, sent, overdue, paid, void"},
+            },
+        }),
+        Tool(name="zoho_books_create_invoice", description="Create a new invoice in Zoho Books", inputSchema={
+            "type": "object",
+            "properties": {
+                "customer_id":   {"type": "string"},
+                "line_items":    {"type": "array",  "description": "List of {item_id, quantity, rate}"},
+                "invoice_date":  {"type": "string", "description": "YYYY-MM-DD"},
+                "due_date":      {"type": "string", "description": "YYYY-MM-DD"},
+            },
+            "required": ["customer_id", "line_items"],
+        }),
+        Tool(name="zoho_books_contacts", description="List contacts from Zoho Books", inputSchema={
+            "type": "object",
+            "properties": {
+                "search": {"type": "string"},
+            },
+        }),
+        # ── Inventory ─────────────────────────────────────────────
+        Tool(name="zoho_inventory_items", description="List items from Zoho Inventory", inputSchema={
+            "type": "object", "properties": {},
+        }),
+        Tool(name="zoho_inventory_orders", description="List sales orders from Zoho Inventory", inputSchema={
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "description": "draft, confirmed, shipped, delivered"},
+            },
+        }),
+        Tool(name="zoho_inventory_create_item", description="Add a new item/product to Zoho Inventory", inputSchema={
+            "type": "object",
+            "properties": {
+                "name":         {"type": "string"},
+                "rate":         {"type": "number"},
+                "description":  {"type": "string"},
+                "sku":          {"type": "string"},
+                "unit":         {"type": "string"},
+            },
+            "required": ["name", "rate"],
+        }),
+        # ── Mail ──────────────────────────────────────────────────
+        Tool(name="zoho_mail_accounts", description="List Zoho Mail accounts", inputSchema={
+            "type": "object", "properties": {},
+        }),
+        Tool(name="zoho_mail_messages", description="Read recent messages from Zoho Mail", inputSchema={
+            "type": "object",
+            "properties": {
+                "account_id": {"type": "string"},
+                "limit":      {"type": "integer", "default": 10},
+            },
+            "required": ["account_id"],
+        }),
+        Tool(name="zoho_mail_send", description="Send an email via Zoho Mail", inputSchema={
+            "type": "object",
+            "properties": {
+                "account_id": {"type": "string"},
+                "to":         {"type": "string", "description": "Recipient email"},
+                "subject":    {"type": "string"},
+                "body":       {"type": "string"},
+            },
+            "required": ["account_id", "to", "subject", "body"],
+        }),
     ]
 
 
 @mcp.call_tool()
 async def call_tool(name: str, arguments: dict):
     try:
+        org = {"organization_id": ORG_ID} if ORG_ID else {}
+
+        # ── CRM ──────────────────────────────────────────────────
         if name == "zoho_crm_list":
-            data = await zget(f"{CRM}/{arguments.get('module','Contacts')}", params={"per_page": arguments.get("per_page", 10), "fields": "Full_Name,Email,Phone,Account_Name"})
+            data = await zget(
+                f"{CRM}/{arguments.get('module', 'Contacts')}",
+                params={"per_page": arguments.get("per_page", 10), "fields": "Full_Name,Email,Phone,Account_Name"},
+            )
         elif name == "zoho_crm_search":
-            data = await zget(f"{CRM}/{arguments['module']}/search", params={"criteria": arguments["criteria"]})
+            data = await zget(
+                f"{CRM}/{arguments['module']}/search",
+                params={"criteria": arguments["criteria"]},
+            )
         elif name == "zoho_crm_create":
             data = await zpost(f"{CRM}/{arguments['module']}", {"data": [arguments["data"]]})
+
+        elif name == "zoho_crm_update":
+            data = await zput(
+                f"{CRM}/{arguments['module']}/{arguments['record_id']}",
+                {"data": [arguments["data"]]},
+            )
+        elif name == "zoho_crm_delete":
+            data = await zdelete(f"{CRM}/{arguments['module']}/{arguments['record_id']}")
+
+        # ── Books ─────────────────────────────────────────────────
         elif name == "zoho_books_invoices":
-            params = {"organization_id": ORG_ID} if ORG_ID else {}
-            if "status" in arguments: params["status"] = arguments["status"]
+            params = {**org}
+            if "status" in arguments:
+                params["status"] = arguments["status"]
             data = await zget(f"{BOOKS}/invoices", params=params)
+
+        elif name == "zoho_books_create_invoice":
+            body = {
+                "customer_id": arguments["customer_id"],
+                "line_items":  arguments["line_items"],
+            }
+            if "invoice_date" in arguments: body["invoice_date"] = arguments["invoice_date"]
+            if "due_date"     in arguments: body["due_date"]     = arguments["due_date"]
+            params = org if org else {}
+            data = await zpost(f"{BOOKS}/invoices" + (f"?organization_id={ORG_ID}" if ORG_ID else ""), body)
+
         elif name == "zoho_books_contacts":
-            params = {"organization_id": ORG_ID} if ORG_ID else {}
-            if "search" in arguments: params["search_text"] = arguments["search"]
+            params = {**org}
+            if "search" in arguments:
+                params["search_text"] = arguments["search"]
             data = await zget(f"{BOOKS}/contacts", params=params)
+
+        # ── Inventory ─────────────────────────────────────────────
         elif name == "zoho_inventory_items":
-            data = await zget(f"{INV}/items", params={"organization_id": ORG_ID} if ORG_ID else {})
+            data = await zget(f"{INV}/items", params=org)
+
         elif name == "zoho_inventory_orders":
-            params = {"organization_id": ORG_ID} if ORG_ID else {}
-            if "status" in arguments: params["status"] = arguments["status"]
+            params = {**org}
+            if "status" in arguments:
+                params["status"] = arguments["status"]
             data = await zget(f"{INV}/salesorders", params=params)
+
+        elif name == "zoho_inventory_create_item":
+            body = {"name": arguments["name"], "rate": arguments["rate"]}
+            for k in ("description", "sku", "unit"):
+                if k in arguments:
+                    body[k] = arguments[k]
+            url = f"{INV}/items" + (f"?organization_id={ORG_ID}" if ORG_ID else "")
+            data = await zpost(url, body)
+
+        # ── Mail ──────────────────────────────────────────────────
         elif name == "zoho_mail_accounts":
             data = await zget(f"{MAIL}/accounts")
+
         elif name == "zoho_mail_messages":
-            data = await zget(f"{MAIL}/accounts/{arguments['account_id']}/messages/view", params={"limit": arguments.get("limit", 10)})
+            data = await zget(
+                f"{MAIL}/accounts/{arguments['account_id']}/messages/view",
+                params={"limit": arguments.get("limit", 10)},
+            )
+        elif name == "zoho_mail_send":
+            body = {
+                "fromAddress": "",
+                "toAddress":   arguments["to"],
+                "subject":     arguments["subject"],
+                "content":     arguments["body"],
+                "mailFormat":  "plaintext",
+            }
+            data = await zpost(f"{MAIL}/accounts/{arguments['account_id']}/messages", body)
+
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
+
         return [TextContent(type="text", text=json.dumps(data, ensure_ascii=False, indent=2))]
     except Exception as e:
         return [TextContent(type="text", text=f"Error: {e}")]
