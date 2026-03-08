@@ -187,15 +187,23 @@ async def handle_sse(request: Request):
 async def exchange_code(request: Request):
     import httpx
     code = request.query_params.get("code","")
+    uris = [
+        "urn:ietf:wg:oauth:2.0:oob",
+        "http://localhost:8765/callback",
+    ]
     async with httpx.AsyncClient() as c:
-        r = await c.post("https://accounts.zoho.com/oauth/v2/token", data={
-            "code": code,
-            "client_id": CLIENT_ID,
-            "client_secret": CLIENT_SECRET,
-            "redirect_uri": "urn:ietf:wg:oauth:2.0:oob",
-            "grant_type": "authorization_code",
-        })
-    return JSONResponse(r.json())
+        for uri in uris:
+            r = await c.post("https://accounts.zoho.com/oauth/v2/token", data={
+                "code": code,
+                "client_id": CLIENT_ID,
+                "client_secret": CLIENT_SECRET,
+                "redirect_uri": uri,
+                "grant_type": "authorization_code",
+            })
+            result = r.json()
+            if "refresh_token" in result or "access_token" in result:
+                return JSONResponse(result)
+        return JSONResponse(result)
 
 async def health(request: Request):
     return JSONResponse({"status": "ok", "service": "Zoho MCP"})
